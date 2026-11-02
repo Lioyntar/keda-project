@@ -1,0 +1,11 @@
+{
+  "seed": 42,
+  "tick_seconds": 0.25,
+  "phases": [
+    {"name": "low",       "duration": 120, "rate": 5},
+    {"name": "spike",     "duration": 60,  "rate": 80},
+    {"name": "high",      "duration": 240, "rate": 50},
+    {"name": "ramp_down", "duration": 180, "from": 50, "to": 5},
+    {"name": "idle",      "duration": 300, "rate": 0}
+  ]
+}
