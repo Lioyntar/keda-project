@@ -1,0 +1,53 @@
+# Πείραμα Β: KEDA με συνδυασμένο σήμα ζήτησης (η τελική μας επιλογή).
+#   throughput = jobs/s που ολοκληρώνουν οι workers (από το Prometheus)
+#   backlog    = jobs που περιμένουν στην ουρά (από το Redis)
+#   ζήτηση     = throughput + backlog / 30   -> «όση δουλειά έρχεται, συν ό,τι περιμένει, να φύγει σε 30 s»
+# Απόφαση: replicas = ceil(ζήτηση / 8), όπου 8 jobs/s ≈ 85% του μ (~9.5 jobs/s) ενός worker.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-scaler
+spec:
+  scaleTargetRef:
+    name: worker
+  pollingInterval: 5
+  cooldownPeriod: 60
+  minReplicaCount: 0
+  maxReplicaCount: 10
+  advanced:
+    scalingModifiers:
+      formula: "throughput + backlog / 30"
+      target: "8"
+      activationTarget: "0"
+      metricType: "AverageValue"
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          selectPolicy: Max
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+            - type: Pods
+              value: 4
+              periodSeconds: 15
+        scaleDown:
+          stabilizationWindowSeconds: 60
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+  triggers:
+    - type: prometheus
+      name: throughput
+      metadata:
+        serverAddress: http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+        query: sum(rate(worker_jobs_processed_total[30s])) or vector(0)   # «or vector(0)»: 0 αντί για κενό όταν δεν υπάρχουν ακόμα μετρήσεις
+        threshold: "8"
+    - type: redis
+      name: backlog
+      metadata:
+        address: redis.default.svc.cluster.local:6379
+        listName: jobs
+        listLength: "10"

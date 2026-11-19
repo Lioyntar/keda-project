@@ -1,0 +1,9 @@
+{
+  "seed": 42,
+  "tick_seconds": 0.25,
+  "phases": [
+    {"name": "low",   "duration": 10, "rate": 5},
+    {"name": "spike", "duration": 20, "rate": 40},
+    {"name": "idle",  "duration": 30, "rate": 0}
+  ]
+}

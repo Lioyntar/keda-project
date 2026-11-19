@@ -1,0 +1,16 @@
+# Λέει στο Prometheus να διαβάζει το /metrics κάθε worker pod κάθε 5 δευτερόλεπτα.
+# Το label "release: monitoring" χρειάζεται για να το «δει» το kube-prometheus-stack
+# (το εγκαταστήσαμε με helm release name "monitoring").
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: worker
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: worker
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 5s

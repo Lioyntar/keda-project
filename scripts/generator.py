@@ -1,6 +1,10 @@
 """
 Workload generator: στέλνει jobs στην ουρά Redis σύμφωνα με ένα σενάριο φάσεων.
 Αφίξεις Poisson με σταθερό seed -> το ίδιο σενάριο δίνει πάντα το ίδιο φορτίο.
+
+v2: οι χρονοσφραγίδες (enqueued_at, unix_time) παίρνονται από το ρολόι του Redis,
+ώστε generator, workers και collector να μετρούν με το ίδιο ρολόι (του cluster).
+Μπορεί να τρέξει μόνο του ή να καλεστεί από το run_experiment.py.
 """
 import argparse
 import csv
@@ -12,6 +16,11 @@ from datetime import datetime
 
 import numpy as np
 import redis
+
+
+def load_scenario(path):
+    with open(path) as f:
+        return json.load(f)
 
 
 def target_rate(phase, t_in_phase):
@@ -38,7 +47,13 @@ def build_schedule(scenario):
     return schedule, dt
 
 
-def plot_plan(schedule, dt, name):
+def redis_now(r):
+    """Η ώρα του Redis (δηλαδή του cluster), σε δευτερόλεπτα."""
+    sec, usec = r.time()
+    return sec + usec / 1e6
+
+
+def plot_plan(schedule, dt, name, out_dir="results"):
     import matplotlib.pyplot as plt
 
     ts = [s[0] for s in schedule]
@@ -51,9 +66,45 @@ def plot_plan(schedule, dt, name):
     plt.legend()
     plt.grid(alpha=0.3)
     plt.tight_layout()
-    out = f"results/{name}_plan.png"
+    out = os.path.join(out_dir, f"{name}_plan.png")
     plt.savefig(out, dpi=150)
     print(f"Plan saved to {out}")
+
+
+def run_scenario(scenario, r, queue, out_csv, flush=True, done_list="done", verbose=True):
+    """Στέλνει το σενάριο στην ουρά και γράφει ένα CSV ανά βήμα. Επιστρέφει πόσα jobs στάλθηκαν."""
+    schedule, dt = build_schedule(scenario)
+    if flush:
+        r.delete(queue, done_list)    # καθαρή αρχή για κάθε πείραμα
+
+    total_sent = 0
+    start = time.time()               # τοπικό ρολόι μόνο για τον ρυθμό αποστολής
+    with open(out_csv, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["t", "unix_time", "phase", "target_rate", "sent", "total_sent", "queue_len"])
+        try:
+            for t, phase, rate, n in schedule:
+                delay = start + t - time.time()    # σταθερό ρολόι, χωρίς συσσώρευση καθυστερήσεων
+                if delay > 0:
+                    time.sleep(delay)
+                now = redis_now(r)                 # ώρα cluster
+
+                pipe = r.pipeline()                # όλα τα jobs του βήματος σε ένα round-trip
+                for _ in range(n):
+                    pipe.rpush(queue, json.dumps({"id": uuid.uuid4().hex, "enqueued_at": now}))
+                pipe.llen(queue)
+                queue_len = pipe.execute()[-1]
+
+                total_sent += n
+                w.writerow([t, f"{now:.3f}", phase, f"{rate:.2f}", n, total_sent, queue_len])
+                if verbose:
+                    print(f"\r t={t:6.1f}s  phase={phase:<10} rate={rate:5.1f}/s  "
+                          f"sent={total_sent:6d}  queue={queue_len:6d}", end="", flush=True)
+        except KeyboardInterrupt:
+            print("\nInterrupted - partial log kept.")
+    if verbose:
+        print()
+    return total_sent
 
 
 def main():
@@ -66,8 +117,7 @@ def main():
     ap.add_argument("--no-flush", action="store_true", help="do not empty the queue first")
     args = ap.parse_args()
 
-    with open(args.scenario) as f:
-        scenario = json.load(f)
+    scenario = load_scenario(args.scenario)
     name = os.path.splitext(os.path.basename(args.scenario))[0]
     schedule, dt = build_schedule(scenario)
     total = sum(s[3] for s in schedule)
@@ -79,36 +129,9 @@ def main():
         return
 
     r = redis.Redis(host=args.host, port=args.port)
-    if not args.no_flush:
-        r.delete(args.queue)          # καθαρή αρχή για κάθε πείραμα
-
     out = f"results/{name}_{datetime.now():%Y%m%d_%H%M%S}.csv"
-    total_sent = 0
-    start = time.time()
-    with open(out, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["t", "unix_time", "phase", "target_rate", "sent", "total_sent", "queue_len"])
-        try:
-            for t, phase, rate, n in schedule:
-                delay = start + t - time.time()    # κρατάμε σταθερό ρολόι
-                if delay > 0:
-                    time.sleep(delay)
-                now = time.time()
-
-                pipe = r.pipeline()                # όλα τα jobs του βήματος σε ένα round-trip
-                for _ in range(n):
-                    pipe.rpush(args.queue, json.dumps({"id": uuid.uuid4().hex, "enqueued_at": now}))
-                pipe.llen(args.queue)
-                queue_len = pipe.execute()[-1]
-
-                total_sent += n
-                w.writerow([t, f"{now:.3f}", phase, f"{rate:.2f}", n, total_sent, queue_len])
-                print(f"\r t={t:6.1f}s  phase={phase:<10} rate={rate:5.1f}/s  "
-                      f"sent={total_sent:6d}  queue={queue_len:6d}", end="", flush=True)
-        except KeyboardInterrupt:
-            print("\nInterrupted - partial log kept.")
-
-    print(f"\nDone. {total_sent} jobs sent. Log: {out}")
+    sent = run_scenario(scenario, r, args.queue, out, flush=not args.no_flush)
+    print(f"Done. {sent} jobs sent. Log: {out}")
 
 
 if __name__ == "__main__":

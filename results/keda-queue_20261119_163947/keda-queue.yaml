@@ -1,0 +1,39 @@
+# Πείραμα Α: KEDA μόνο με το μήκος της ουράς (η «απλή» επιλογή).
+# Απόφαση: replicas = ceil(μήκος ουράς / listLength) = ceil(LLEN / 10)
+# Δηλαδή κάθε worker «δικαιούται» ~10 jobs σε αναμονή, περίπου 1 s δουλειάς (μ ≈ 10 jobs/s).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-scaler
+spec:
+  scaleTargetRef:
+    name: worker
+  pollingInterval: 5        # κάθε 5 s ελέγχει αν υπάρχει δουλειά (0 <-> 1 replica)
+  cooldownPeriod: 60        # 60 s χωρίς δουλειά -> 0 replicas
+  minReplicaCount: 0        # scale-to-zero
+  maxReplicaCount: 10
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:             # ίδιο behavior και στα τρία πειράματα, για δίκαιη σύγκριση
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          selectPolicy: Max
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+            - type: Pods
+              value: 4
+              periodSeconds: 15
+        scaleDown:
+          stabilizationWindowSeconds: 60
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+  triggers:
+    - type: redis
+      metadata:
+        address: redis.default.svc.cluster.local:6379
+        listName: jobs
+        listLength: "10"

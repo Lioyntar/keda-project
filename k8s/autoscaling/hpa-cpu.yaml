@@ -1,0 +1,39 @@
+# Πείραμα Γ (baseline): κλασικό HPA με CPU.
+# Το ποσοστό μετριέται ως προς το request (500m). Ένας worker που δουλεύει συνέχεια καίει
+# 1 πυρήνα = 200% του request. Στόχος 100% σημαίνει «κάθε worker απασχολημένος ~50% του χρόνου».
+# Απόφαση: replicas = ceil(replicas_τώρα × CPU_τώρα / 100%)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker
+  minReplicas: 1            # το HPA δεν μπορεί να πάει στο 0
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 100
+  behavior:                 # ίδιο behavior με τα πειράματα KEDA
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 4
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15

@@ -1,0 +1,13 @@
+{
+  "mode": "keda-combined",
+  "autoscaler": "keda",
+  "scenario": "scenarios/main.json",
+  "started_local": "2026-11-19T17:04:02",
+  "interval": 2.0,
+  "tail": 60,
+  "start_replicas": 0,
+  "jobs_sent": 22207,
+  "jobs_done": 22207,
+  "jobs_left_in_queue": 0,
+  "collector_errors": {}
+}

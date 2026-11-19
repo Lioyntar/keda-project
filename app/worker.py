@@ -13,6 +13,7 @@ from prometheus_client import Counter, Gauge, Histogram, start_http_server
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 QUEUE = os.getenv("QUEUE_NAME", "jobs")
+DONE_LIST = os.getenv("DONE_LIST", "done")          # v2: εδώ γράφεται κάθε ολοκληρωμένο job
 DEFAULT_ITERATIONS = int(os.getenv("WORK_ITERATIONS", "300000"))
 METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
 HEARTBEAT_FILE = os.getenv("HEARTBEAT_FILE", os.path.join(tempfile.gettempdir(), "heartbeat"))
@@ -30,9 +31,11 @@ BUSY = Gauge("worker_busy", "1 while processing a job, 0 when idle")
 # --- Graceful shutdown: στο scale-in το Kubernetes στέλνει SIGTERM ---
 running = True
 
+
 def stop(signum, frame):
     global running
     running = False
+
 
 signal.signal(signal.SIGTERM, stop)
 signal.signal(signal.SIGINT, stop)
@@ -63,14 +66,21 @@ def main():
             continue                       # άδεια ουρά -> ξαναέλεγξε το running
         job = json.loads(item[1])
 
-        wait = time.time() - job["enqueued_at"]
+        started = time.time()
+        wait = started - job["enqueued_at"]
         WAIT_TIME.observe(wait)
         BUSY.set(1)
         with JOB_TIME.time():
             process(job)
         BUSY.set(0)
+        finished = time.time()
         JOBS_DONE.inc()
-        print(f"[{POD}] job {job['id'][:8]} done (waited {wait:.2f}s)", flush=True)
+
+        # v2: καταγραφή κάθε job για την αξιολόγηση (ερώτημα 6)
+        r.rpush(DONE_LIST, json.dumps({
+            "id": job["id"], "enq": job["enqueued_at"],
+            "start": round(started, 4), "end": round(finished, 4), "pod": POD,
+        }))
 
     print(f"[{POD}] shutting down gracefully", flush=True)
 
